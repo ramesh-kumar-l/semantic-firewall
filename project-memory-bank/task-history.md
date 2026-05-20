@@ -173,3 +173,35 @@ Implemented encoding-aware normalization (base64/ROT13/unicode/URL), memory pois
 - Session escalation: ×1.2 multiplier on risk when prior `MaxRisk > 0.5` (capped at 1.0)
 - Session store disabled when `ttl_seconds = 0` (no goroutine, nil pointer)
 - `normalize()` stub in `inspect.go` replaced with real `normalize.Normalize()` call
+
+---
+
+## Phase 5 — Testing & Hardening
+
+### TASK-006: Phase 5 Implementation
+
+**Date:** 2026-05-20  
+**Status:** Complete  
+**Phase:** 5
+
+**Summary:**  
+Wrote unit tests for all packages and an integration test for the full `/v1/inspect` pipeline, plus a fuzz target for the encoding normalizer.
+
+**Files Created:**
+- `internal/normalize/normalizer_test.go` — 6 unit tests + `FuzzNormalize` fuzz target
+- `internal/detection/injection_test.go` — 7 unit tests
+- `internal/detection/toolcall_test.go` — 6 unit tests
+- `internal/session/store_test.go` — 7 unit tests (incl. real TTL eviction)
+- `internal/scoring/scorer_test.go` — 6 unit tests
+- `internal/policy/engine_test.go` — 7 unit tests
+- `internal/transform/redactor_test.go` — 7 unit tests
+- `internal/ratelimit/limiter_test.go` — 6 unit tests
+- `internal/middleware/apikey_test.go` — 7 middleware tests
+- `internal/middleware/inspect_test.go` — 11 integration tests (full pipeline)
+
+**Key Decisions:**
+- Standard library testing only (no stretchr/testify)
+- All tests use black-box `package xxx_test` pattern
+- `TestMain` in middleware package creates shared OTel provider with stdout exporters
+- `noopLogger` implements `audit.Logger` in test code (no disk I/O during tests)
+- Fuzz seeds cover all 5 normalization paths (base64, ROT13, URL, ZWS, clean)

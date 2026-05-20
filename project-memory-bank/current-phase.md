@@ -1,6 +1,6 @@
 # Current Phase
 
-## Phase: 4 — Advanced Detection
+## Phase: 5 — Testing & Hardening
 
 **Status:** Complete  
 **Started:** 2026-05-20  
@@ -8,61 +8,67 @@
 
 ---
 
-## Phase 4 Goals
+## Phase 5 Goals
 
-- [x] Encoding-aware normalization (`internal/normalize/normalizer.go`)
-  - Zero-width / invisible Unicode character stripping
-  - NFKC Unicode normalization (collapses homoglyphs via `golang.org/x/text`)
-  - URL percent-encoding detection and decode
-  - Base64 segment detection and decode (printable ASCII check)
-  - ROT13 canary detection and full-string decode
-- [x] Memory poisoning detection patterns (added to `internal/detection/patterns.go`)
-  - `from_now_on`, `remember_you_must`, `new_default_behavior`, `store_in_memory`, `always_respond_with`, `whenever_user_asks`
-  - New `FindingMemoryPoisoning` finding type
-- [x] Tool call inspection (`internal/detection/toolcall.go`)
-  - `ExtractToolCallText()` recursively extracts string values from `[]json.RawMessage`
-  - Result passed to existing `InjectionDetector.Detect()` — no new interface needed
-  - `ToolCalls []json.RawMessage` added to `types.InspectRequest`
-- [x] Multi-turn context awareness (`internal/session/store.go`)
-  - In-memory session registry with TTL eviction (same pattern as rate limiter)
-  - `Get()` / `Update()` per session_id in request context
-  - If `MaxRisk > 0.5` in prior turns: current risk escalated ×1.2 (capped at 1.0)
-  - `SessionStore *session.Store` added to `Options` struct
-  - `session.ttl_seconds` config key (default 3600, 0 = disabled)
-- [x] New finding types: `FindingMemoryPoisoning`, `FindingToolCallInjection`
-- [x] `golang.org/x/text v0.16.0` added to `go.mod`
-- [x] Version bumped to `0.4.0`
+- [x] Unit tests for all packages
+  - `internal/normalize/normalizer_test.go` — 6 tests + fuzz target
+  - `internal/detection/injection_test.go` — 7 tests (clean, role_override, jailbreak, prompt_injection, memory_poisoning, dedup, field validation)
+  - `internal/detection/toolcall_test.go` — 6 tests (nil, simple, nested, multiple, invalid JSON, type filtering)
+  - `internal/session/store_test.go` — 7 tests (unknown, update+get, turn count, max risk, copy, TTL eviction, stop idempotent)
+  - `internal/scoring/scorer_test.go` — 6 tests (no findings, empty, critical, high, diminishing returns, bounds, severity ordering)
+  - `internal/policy/engine_test.go` — 7 tests (critical/high deny, score threshold, at-threshold, default action, update rules, rule name)
+  - `internal/transform/redactor_test.go` — 7 tests (no findings, empty, single, empty evidence, multiple occurrences, multiple findings, non-matching)
+  - `internal/ratelimit/limiter_test.go` — 6 tests (within burst, deny over burst, independent keys, stop idempotent, no-TTL stop, allow after stop)
+- [x] API key middleware tests: `internal/middleware/apikey_test.go` — 7 tests (bearer, X-API-Key, multiple keys, invalid, missing, no prefix, empty list)
+- [x] Integration test: `internal/middleware/inspect_test.go` — 11 tests covering full `/v1/inspect` pipeline
+  - Clean prompt → allow; injection → deny; tool call injection → deny
+  - Missing prompt → 400; too large → 422; invalid body → 400; rate limited → 429
+  - Custom deny message; findings not null; response content-type
+- [x] Fuzz target: `FuzzNormalize` in `normalizer_test.go` (runs with `go test -fuzz=FuzzNormalize`)
+- [x] `TestMain` in middleware package sets up shared telemetry provider (stdout exporter, initialized once per test binary)
 
-## Phase 4 Key Decisions
+## Phase 5 Key Decisions
 
-- Normalizer runs before all detection; encoding findings prepended to findings list
-- Tool call injection findings reuse `InjectionDetector` — no separate interface; any matched finding is labelled with detector name `injection_detector_v1`
-- Session escalation: simple ×1.2 multiplier when prior MaxRisk > 0.5 (conservative; callers can tune via YAML rules threshold)
-- Session store disabled when `ttl_seconds = 0` (no goroutine started, nil pointer passed)
-- `normalize.Normalize()` replaces the stub `normalize()` function in `inspect.go`
+- No `stretchr/testify` dependency — tests use standard `testing` package only
+- Black-box tests (`package xxx_test`) throughout — no access to unexported symbols needed
+- Session store TTL eviction tested with 50ms TTL to keep wall-clock time under ~200ms
+- Integration test uses a `noopLogger` (in-memory discard) to avoid file system state
+- `TestMain` in `middleware_test` package initializes OTel provider once; avoids global provider races across tests
+- Fuzz seeds: clean prompt, base64 attack, ROT13, URL-encoded, zero-width, empty
 
-## Breaking Changes from Phase 3
+## Test Coverage Summary
 
-- `golang.org/x/text` added to `go.mod` — `go mod tidy` required before build
-- `firewallVersion` constant in middleware: `"0.4.0"`
-- `Options.SessionStore *session.Store` added (nil-safe; no callers break)
-- `types.InspectRequest.ToolCalls []json.RawMessage` added (nil-safe; no callers break)
+| Package | Tests | Notes |
+|---------|-------|-------|
+| normalize | 6 + fuzz | covers all 5 normalization paths |
+| detection/injection | 7 | all finding types incl. memory_poisoning |
+| detection/toolcall | 6 | incl. nested JSON, invalid input |
+| session | 7 | incl. TTL eviction (real 50ms sleep) |
+| scoring | 6 | severity ordering, bounds check |
+| policy | 7 | incl. UpdateRules hot-swap |
+| transform | 7 | incl. edge cases |
+| ratelimit | 6 | incl. post-Stop behavior |
+| middleware/apikey | 7 | both header formats |
+| middleware/inspect | 11 | full pipeline integration |
 
-## Next Phase: Phase 5 — Testing & Hardening (proposed)
+## Next Phase: Phase 6 — Production Readiness (proposed)
 
-### Phase 5 Goals
-1. Unit tests for all packages (normalize, detection, session, scoring, policy, transform, alert)
-2. Integration test for the full `/v1/inspect` pipeline
-3. Fuzz target for normalize.Normalize()
-4. Benchmark for hot path (detection + scoring)
+### Phase 6 Goals (pending approval)
+1. Dockerfile + multi-stage build
+2. `config/config.example.yaml` → documented reference config
+3. `docker-compose.yml` for local dev (firewall + Prometheus + Grafana)
+4. Makefile with `build`, `test`, `fuzz`, `lint`, `docker` targets
+5. Health check endpoint improvements (dependency status)
+6. Graceful shutdown improvements (drain in-flight requests)
 
 ## Blockers
 
-- Go 1.22+ must be installed before building
-- `go mod tidy` required after Phase 4 (new `golang.org/x/text` dependency)
-- `go.sum` not yet generated
+- Go 1.22+ must be installed to run tests
+- `go mod tidy` required (resolve `golang.org/x/text` + any new test dependencies)
+- `go test ./...` to verify all tests pass
+- `go test -fuzz=FuzzNormalize ./internal/normalize/` to run fuzzer
 
 ## Notes
 
-- `golang.org/x/text v0.16.0` needed for `golang.org/x/text/unicode/norm` NFKC normalization
-- Session store pattern mirrors `ratelimit.Limiter` (same TTL eviction logic)
+- Trace output from `stdouttrace` exporter appears in test output; this is acceptable
+- The TTL eviction test in `session` uses `time.Sleep(ttl*3)` — will add ~150ms to test run time
