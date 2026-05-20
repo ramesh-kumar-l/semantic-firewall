@@ -13,10 +13,11 @@ policy:
   default_action: "allow"
   deny_threshold: 0.8
   rules_file: "config/policy_rules.yaml"
+  deny_message: "Your request was blocked by the content policy."  # custom deny message
 
 telemetry:
   service_name: "semantic-firewall"
-  service_version: "0.2.0"
+  service_version: "0.3.0"
   exporter_type: "stdout"        # "stdout" or "otlp"
   metrics_exporter: "prometheus" # "prometheus" or "stdout"
   otlp_endpoint: "http://localhost:4318"
@@ -25,3 +26,15 @@ rate_limit:
   enabled: true
   rps: 10.0
   burst: 20
+  ttl_seconds: 3600  # evict idle per-caller limiters after 1 hour; 0 = no eviction
+
+auth:
+  enabled: false
+  api_keys: []
+  # api_keys:
+  #   - "secret-key-1"
+  #   - "secret-key-2"
+
+alert:
+  webhook_url: ""    # POST target for alert-action rules; empty = disabled
+  timeout_ms: 5000

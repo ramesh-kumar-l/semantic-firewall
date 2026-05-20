@@ -16,6 +16,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 
 	"github.com/ramesh152/semantic-firewall/config"
+	"github.com/ramesh152/semantic-firewall/internal/alert"
 	"github.com/ramesh152/semantic-firewall/internal/audit"
 	"github.com/ramesh152/semantic-firewall/internal/detection"
 	inspectmw "github.com/ramesh152/semantic-firewall/internal/middleware"
@@ -27,7 +28,7 @@ import (
 )
 
 const (
-	version      = "0.2.0"
+	version      = "0.3.0"
 	drainTimeout = 10 * time.Second
 )
 
@@ -113,8 +114,20 @@ func main() {
 
 	var rateLimiter *ratelimit.Limiter
 	if cfg.RateLimit.Enabled {
-		rateLimiter = ratelimit.New(cfg.RateLimit.RPS, cfg.RateLimit.Burst)
-		slog.Info("rate_limit.enabled", "rps", cfg.RateLimit.RPS, "burst", cfg.RateLimit.Burst)
+		ttl := time.Duration(cfg.RateLimit.TTLSeconds) * time.Second
+		rateLimiter = ratelimit.New(cfg.RateLimit.RPS, cfg.RateLimit.Burst, ttl)
+		defer rateLimiter.Stop()
+		slog.Info("rate_limit.enabled",
+			"rps", cfg.RateLimit.RPS,
+			"burst", cfg.RateLimit.Burst,
+			"ttl_seconds", cfg.RateLimit.TTLSeconds,
+		)
+	}
+
+	var webhooker *alert.Webhooker
+	if cfg.Alert.WebhookURL != "" {
+		webhooker = alert.New(cfg.Alert.WebhookURL, cfg.Alert.TimeoutMs)
+		slog.Info("alert.webhook.enabled", "url", cfg.Alert.WebhookURL)
 	}
 
 	r := chi.NewRouter()
@@ -122,21 +135,33 @@ func main() {
 	r.Use(chimw.RequestID)
 
 	r.Get("/health", healthHandler(version))
-	r.Post("/v1/inspect", inspectmw.Handler(
+
+	if tel.MetricsHandler != nil {
+		r.Handle("/metrics", tel.MetricsHandler)
+		slog.Info("metrics.prometheus.enabled", "path", "/metrics")
+	}
+
+	inspectHandler := inspectmw.Handler(
 		scorer,
 		detector,
 		policyEngine,
 		auditLogger,
 		tel,
 		instruments,
-		time.Duration(cfg.Server.InspectTimeoutMs)*time.Millisecond,
-		cfg.Server.MaxPromptBytes,
-		rateLimiter,
-	))
+		inspectmw.Options{
+			InspectTimeout: time.Duration(cfg.Server.InspectTimeoutMs) * time.Millisecond,
+			MaxBytes:       cfg.Server.MaxPromptBytes,
+			RateLimiter:    rateLimiter,
+			Alerter:        webhooker,
+			DenyMessage:    cfg.Policy.DenyMessage,
+		},
+	)
 
-	if tel.MetricsHandler != nil {
-		r.Handle("/metrics", tel.MetricsHandler)
-		slog.Info("metrics.prometheus.enabled", "path", "/metrics")
+	if cfg.Auth.Enabled && len(cfg.Auth.APIKeys) > 0 {
+		r.With(inspectmw.APIKeyAuth(cfg.Auth.APIKeys)).Post("/v1/inspect", inspectHandler)
+		slog.Info("auth.apikey.enabled", "keys", len(cfg.Auth.APIKeys))
+	} else {
+		r.Post("/v1/inspect", inspectHandler)
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

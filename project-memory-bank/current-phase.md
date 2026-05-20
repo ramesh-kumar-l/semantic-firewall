@@ -1,6 +1,6 @@
 # Current Phase
 
-## Phase: 2 — Policy Engine & Observability
+## Phase: 3 — Transform & Alert Actions
 
 **Status:** Complete  
 **Started:** 2026-05-20  
@@ -8,35 +8,47 @@
 
 ---
 
-## Phase 2 Goals
+## Phase 3 Goals
 
-- [x] YAML-driven policy rules (`internal/policy/loader.go`)
-- [x] Policy hot-reload via fsnotify (watches `policy.rules_file` on disk)
-- [x] Prometheus `/metrics` endpoint (OTel Prometheus exporter)
-- [x] OTLP trace exporter support (`telemetry.exporter_type: otlp`)
-- [x] Pluggable telemetry config (`telemetry.Config` struct in telemetry package)
-- [x] Per-caller rate limiting (`internal/ratelimit`, token bucket via `golang.org/x/time/rate`)
-- [x] `CodeRateLimited` error code added to `pkg/errors`
-- [x] `RateLimitConfig` and extended policy/telemetry config fields in `config/config.go`
-- [x] `config/policy_rules.yaml` and `config/config.example.yaml` example files
+- [x] `transform` action: prompt sanitization / redaction (`internal/transform/redactor.go`)
+- [x] `alert` action: async webhook POST (`internal/alert/webhook.go`)
+- [x] Configurable deny message: `policy.deny_message` in config → `message` field in response
+- [x] API key authentication middleware (`internal/middleware/apikey.go`)
+  - Accepts `Authorization: Bearer <key>` or `X-API-Key: <key>`
+  - Constant-time comparison (`crypto/subtle`)
+  - Applied per-route (protects `/v1/inspect` only)
+- [x] Rate limiter TTL eviction: background cleanup goroutine, `Stop()` method
+- [x] `Options` struct in `internal/middleware` (replaces long param list)
+- [x] `CodeUnauthorized` error code added to `pkg/errors`
+- [x] `SanitizedPrompt` and `Message` fields added to `types.InspectResponse`
+- [x] `AuthConfig`, `AlertConfig`, `DenyMessage`, `TTLSeconds` added to `config/config.go`
+- [x] `config/config.example.yaml` updated with new sections
 
-## Phase 2 Key Decisions
+## Phase 3 Key Decisions
 
-- Prometheus is the default metrics exporter (replaces stdout metrics); stdout traces remain default
-- Metrics → Prometheus pull-based; Traces → stdout (default) or OTLP push-based
-- Rate limiting is per caller_id (from request body), falls back to RemoteAddr
-- No in-memory rate limiter cleanup in V2 (unbounded map); acceptable for bounded caller populations
-- Hot-reload is file-based (fsnotify Write/Create events), atomic rule swap under sync.RWMutex
-- YAML policy rules fully replace hardcoded defaults when `policy.rules_file` is set
+- `transform` decision: redacts finding evidence strings with `[REDACTED]`; returns `sanitized_prompt` in response
+- `alert` decision: fires async webhook POST (goroutine) with `AuditRecord` as payload; caller receives `decision: alert`
+- All decisions return HTTP 200 — this is an inspection API, not a proxy; caller checks `decision` field
+- API key auth is a chi middleware applied per-route (not global); `/health` and `/metrics` remain unauthenticated
+- Rate limiter uses single write-lock (simplified from Phase 2 double-checked locking) to safely track `lastSeen`
+- TTL eviction sweeps every `ttl/2` interval; 0 TTL = no eviction, no goroutine started
+- `inspectmw.Handler()` now takes `Options` struct instead of individual params (breaking change from Phase 2)
+- Version bumped to `0.3.0`
 
-## Next Phase: Phase 3 — Transform & Alert Actions
+## Breaking Changes from Phase 2
 
-### Phase 3 Goals
-1. `transform` action: prompt sanitization / redaction
-2. `alert` action: webhook or structured alert emission  
-3. Configurable response templates for denied requests
-4. API key authentication middleware
-5. Rate limiting cleanup (TTL-based limiter map eviction)
+- `inspectmw.Handler()` signature: now takes `Options` struct as last param (was: 3 individual params)
+- `ratelimit.New()` signature: now takes `ttl time.Duration` as third param
+- `firewallVersion` constant in middleware: `"0.3.0"`
+
+## Next Phase: Phase 4 — Advanced Detection
+
+### Phase 4 Goals
+1. Encoding-aware normalization (base64, rot13, unicode tricks)
+2. Semantic similarity detection (embedding-based, optional)
+3. Memory poisoning detection patterns
+4. Tool call inspection (structured JSON tool calls)
+5. Multi-turn context awareness
 
 ## Blockers
 
@@ -45,5 +57,5 @@
 
 ## Notes
 
-- `telemetry.New()` signature changed: now takes `telemetry.Config` struct instead of `(serviceName, serviceVersion string)`
-- `inspectmw.Handler()` signature extended: last parameter is `*ratelimit.Limiter` (nil = disabled)
+- `telemetry.New()` still takes `telemetry.Config` struct (unchanged from Phase 2)
+- `inspectmw.APIKeyAuth()` is in the `middleware` package alongside `Handler()`

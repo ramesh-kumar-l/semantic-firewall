@@ -104,3 +104,38 @@ Implemented YAML-driven policy rules with hot-reload, Prometheus /metrics endpoi
 - Hot-reload is file-watch only (not full config reload — port/host changes still require restart)
 - Rate limiter map has no TTL eviction (acceptable for bounded caller populations in V2)
 - YAML rules fully replace hardcoded defaults when `policy.rules_file` is set
+
+---
+
+## Phase 3 — Transform & Alert Actions
+
+### TASK-004: Phase 3 Implementation
+
+**Date:** 2026-05-20  
+**Status:** Complete  
+**Phase:** 3
+
+**Summary:**  
+Implemented `transform` prompt redaction, async webhook alerting, API key authentication middleware, configurable deny message, and rate limiter TTL eviction.
+
+**Files Created:**
+- `internal/transform/redactor.go` — replaces finding evidence with `[REDACTED]`
+- `internal/alert/webhook.go` — async HTTP POST alerter
+- `internal/middleware/apikey.go` — API key auth middleware (Bearer / X-API-Key, subtle compare)
+
+**Files Modified:**
+- `pkg/errors/errors.go` — added CodeUnauthorized
+- `pkg/types/types.go` — added SanitizedPrompt, Message to InspectResponse
+- `config/config.go` — added AuthConfig, AlertConfig, DenyMessage, TTLSeconds
+- `internal/ratelimit/limiter.go` — added TTL eviction with background cleanup goroutine + Stop()
+- `internal/middleware/inspect.go` — Options struct; transform/alert/deny handling; version 0.3.0
+- `cmd/server/main.go` — wired alerter, API key middleware, TTL rate limiter
+- `config/config.example.yaml` — added auth, alert, deny_message, ttl_seconds sections
+
+**Key Decisions:**
+- `transform` redacts finding evidence strings in-place; `sanitized_prompt` returned in response body
+- `alert` fires async goroutine webhook POST with full AuditRecord; caller receives `decision: alert` at HTTP 200
+- All decisions return HTTP 200 — inspection API, not proxy
+- API key auth applied per-route only to `/v1/inspect`; `/health` + `/metrics` unauthenticated
+- Rate limiter simplified to single write-lock (safe `lastSeen` update); TTL sweep every ttl/2
+- `inspectmw.Handler()` now takes `Options` struct (breaking change from Phase 2)

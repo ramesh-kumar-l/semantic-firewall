@@ -12,6 +12,8 @@ type Config struct {
 	Policy    PolicyConfig    `mapstructure:"policy"`
 	Telemetry TelemetryConfig `mapstructure:"telemetry"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
+	Auth      AuthConfig      `mapstructure:"auth"`
+	Alert     AlertConfig     `mapstructure:"alert"`
 }
 
 type ServerConfig struct {
@@ -31,6 +33,7 @@ type PolicyConfig struct {
 	DefaultAction string  `mapstructure:"default_action"`
 	DenyThreshold float64 `mapstructure:"deny_threshold"`
 	RulesFile     string  `mapstructure:"rules_file"`
+	DenyMessage   string  `mapstructure:"deny_message"` // custom message on deny; empty = default
 }
 
 type TelemetryConfig struct {
@@ -42,9 +45,20 @@ type TelemetryConfig struct {
 }
 
 type RateLimitConfig struct {
-	Enabled bool    `mapstructure:"enabled"`
-	RPS     float64 `mapstructure:"rps"`
-	Burst   int     `mapstructure:"burst"`
+	Enabled    bool    `mapstructure:"enabled"`
+	RPS        float64 `mapstructure:"rps"`
+	Burst      int     `mapstructure:"burst"`
+	TTLSeconds int     `mapstructure:"ttl_seconds"` // evict idle entries after N seconds; 0 = no eviction
+}
+
+type AuthConfig struct {
+	Enabled bool     `mapstructure:"enabled"`
+	APIKeys []string `mapstructure:"api_keys"`
+}
+
+type AlertConfig struct {
+	WebhookURL string `mapstructure:"webhook_url"`
+	TimeoutMs  int    `mapstructure:"timeout_ms"`
 }
 
 func Load(path string) (*Config, error) {
@@ -68,6 +82,12 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("rate_limit.enabled", false)
 	v.SetDefault("rate_limit.rps", 10.0)
 	v.SetDefault("rate_limit.burst", 20)
+	v.SetDefault("rate_limit.ttl_seconds", 3600)
+	v.SetDefault("auth.enabled", false)
+	v.SetDefault("auth.api_keys", []string{})
+	v.SetDefault("alert.webhook_url", "")
+	v.SetDefault("alert.timeout_ms", 5000)
+	v.SetDefault("policy.deny_message", "")
 
 	v.AutomaticEnv()
 

@@ -59,13 +59,15 @@ type InspectRequest struct {
 }
 
 type InspectResponse struct {
-	TraceID   string    `json:"trace_id"`
-	RequestID string    `json:"request_id"`
-	Decision  Decision  `json:"decision"`
-	RiskScore RiskScore `json:"risk_score"`
-	Findings  []Finding `json:"findings"`
-	LatencyMs int64     `json:"latency_ms"`
-	Timestamp time.Time `json:"timestamp"`
+	TraceID         string    `json:"trace_id"`
+	RequestID       string    `json:"request_id"`
+	Decision        Decision  `json:"decision"`
+	RiskScore       RiskScore `json:"risk_score"`
+	Findings        []Finding `json:"findings"`
+	LatencyMs       int64     `json:"latency_ms"`
+	Timestamp       time.Time `json:"timestamp"`
+	SanitizedPrompt string    `json:"sanitized_prompt,omitempty"` // set when decision == transform
+	Message         string    `json:"message,omitempty"`          // set when decision == deny
 }
 
 type AuditRecord struct {

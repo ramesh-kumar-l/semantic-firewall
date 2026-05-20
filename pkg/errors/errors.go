@@ -11,6 +11,7 @@ const (
 	CodePolicyDeny     Code = "POLICY_DENY"
 	CodeTimeout        Code = "TIMEOUT"
 	CodeRateLimited    Code = "RATE_LIMITED"
+	CodeUnauthorized   Code = "UNAUTHORIZED"
 )
 
 type FirewallError struct {

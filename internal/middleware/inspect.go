@@ -11,21 +11,30 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	fwerrors "github.com/ramesh152/semantic-firewall/pkg/errors"
-	"github.com/ramesh152/semantic-firewall/pkg/types"
-
+	"github.com/ramesh152/semantic-firewall/internal/alert"
 	"github.com/ramesh152/semantic-firewall/internal/audit"
 	"github.com/ramesh152/semantic-firewall/internal/detection"
 	"github.com/ramesh152/semantic-firewall/internal/policy"
 	"github.com/ramesh152/semantic-firewall/internal/ratelimit"
 	"github.com/ramesh152/semantic-firewall/internal/scoring"
 	"github.com/ramesh152/semantic-firewall/internal/telemetry"
+	"github.com/ramesh152/semantic-firewall/internal/transform"
+	fwerrors "github.com/ramesh152/semantic-firewall/pkg/errors"
+	"github.com/ramesh152/semantic-firewall/pkg/types"
 )
 
-const firewallVersion = "0.2.0"
+const firewallVersion = "0.3.0"
+
+// Options configures the inspect handler.
+type Options struct {
+	InspectTimeout time.Duration
+	MaxBytes       int
+	RateLimiter    *ratelimit.Limiter // nil = disabled
+	Alerter        *alert.Webhooker   // nil = disabled
+	DenyMessage    string             // "" = default message
+}
 
 // Handler returns an http.HandlerFunc that inspects prompts.
-// rateLimiter may be nil if rate limiting is disabled.
 func Handler(
 	scorer scoring.Scorer,
 	detector detection.Detector,
@@ -33,20 +42,18 @@ func Handler(
 	logger audit.Logger,
 	tel *telemetry.Provider,
 	instruments *telemetry.Instruments,
-	inspectTimeout time.Duration,
-	maxBytes int,
-	rateLimiter *ratelimit.Limiter,
+	opts Options,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		ctx, cancel := context.WithTimeout(r.Context(), inspectTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), opts.InspectTimeout)
 		defer cancel()
 
 		ctx, rootSpan := tel.StartSpan(ctx, telemetry.SpanInspect)
 		defer rootSpan.End()
 
-		req, httpCode, fwErr := parseRequest(r, maxBytes)
+		req, httpCode, fwErr := parseRequest(r, opts.MaxBytes)
 		if fwErr != nil {
 			writeError(w, httpCode, fwErr)
 			return
@@ -62,12 +69,12 @@ func Handler(
 		)
 
 		// Rate limiting: prefer caller_id, fall back to remote address.
-		if rateLimiter != nil {
+		if opts.RateLimiter != nil {
 			key := r.RemoteAddr
 			if req.Context != nil && req.Context.CallerID != "" {
 				key = req.Context.CallerID
 			}
-			if !rateLimiter.Allow(key) {
+			if !opts.RateLimiter.Allow(key) {
 				writeError(w, http.StatusTooManyRequests,
 					fwerrors.New(fwerrors.CodeRateLimited, "rate limit exceeded"))
 				return
@@ -86,7 +93,7 @@ func Handler(
 		findings, err := detector.Detect(ctx, normalized)
 		detectSpan.End()
 		if err != nil {
-			handleInternalError(ctx, w, traceID, req.RequestID, err, logger, instruments, start)
+			handleInternalError(ctx, w, traceID, err, logger, instruments, start)
 			return
 		}
 
@@ -94,7 +101,7 @@ func Handler(
 		riskScore, err := scorer.Score(ctx, normalized, findings)
 		scoreSpan.End()
 		if err != nil {
-			handleInternalError(ctx, w, traceID, req.RequestID, err, logger, instruments, start)
+			handleInternalError(ctx, w, traceID, err, logger, instruments, start)
 			return
 		}
 
@@ -102,7 +109,7 @@ func Handler(
 		decision, ruleMatched, err := engine.Evaluate(ctx, riskScore, findings)
 		policySpan.End()
 		if err != nil {
-			handleInternalError(ctx, w, traceID, req.RequestID, err, logger, instruments, start)
+			handleInternalError(ctx, w, traceID, err, logger, instruments, start)
 			return
 		}
 
@@ -153,20 +160,6 @@ func Handler(
 			return
 		}
 
-		if decision == types.DecisionDeny {
-			slog.WarnContext(ctx, "request.denied",
-				"trace_id", traceID,
-				"risk_score", riskScore,
-				"rule", ruleMatched,
-				"findings", len(findings),
-			)
-		} else {
-			slog.InfoContext(ctx, "request.processed",
-				"trace_id", traceID,
-				"decision", decision,
-			)
-		}
-
 		resp := types.InspectResponse{
 			TraceID:   traceID,
 			RequestID: req.RequestID,
@@ -176,6 +169,47 @@ func Handler(
 			LatencyMs: latencyMs,
 			Timestamp: time.Now().UTC(),
 		}
+
+		switch decision {
+		case types.DecisionDeny:
+			msg := opts.DenyMessage
+			if msg == "" {
+				msg = "request denied by policy"
+			}
+			resp.Message = msg
+			slog.WarnContext(ctx, "request.denied",
+				"trace_id", traceID,
+				"risk_score", riskScore,
+				"rule", ruleMatched,
+				"findings", len(findings),
+			)
+
+		case types.DecisionTransform:
+			resp.SanitizedPrompt = transform.Redact(req.Prompt, findings)
+			slog.InfoContext(ctx, "request.transformed",
+				"trace_id", traceID,
+				"risk_score", riskScore,
+				"rule", ruleMatched,
+			)
+
+		case types.DecisionAlert:
+			if opts.Alerter != nil {
+				opts.Alerter.Send(auditRec)
+			}
+			slog.WarnContext(ctx, "request.alert",
+				"trace_id", traceID,
+				"risk_score", riskScore,
+				"rule", ruleMatched,
+				"findings", len(findings),
+			)
+
+		default:
+			slog.InfoContext(ctx, "request.processed",
+				"trace_id", traceID,
+				"decision", decision,
+			)
+		}
+
 		writeJSON(w, http.StatusOK, resp)
 	}
 }
@@ -210,7 +244,7 @@ func parseRequest(r *http.Request, maxBytes int) (*types.InspectRequest, int, *f
 func handleInternalError(
 	ctx context.Context,
 	w http.ResponseWriter,
-	traceID, _ string,
+	traceID string,
 	err error,
 	logger audit.Logger,
 	instruments *telemetry.Instruments,
