@@ -69,3 +69,38 @@ Initialized Go module and scaffolded all package directories and stub files.
 - `internal/telemetry/otel.go`
 - `internal/telemetry/spans.go`
 - `internal/telemetry/metrics.go`
+
+---
+
+## Phase 2 — Policy Engine & Observability
+
+### TASK-003: Phase 2 Implementation
+
+**Date:** 2026-05-20  
+**Status:** Complete  
+**Phase:** 2
+
+**Summary:**  
+Implemented YAML-driven policy rules with hot-reload, Prometheus /metrics endpoint, OTLP trace exporter support, and per-caller rate limiting.
+
+**Files Created:**
+- `internal/policy/loader.go` — YAML policy rule parser
+- `internal/ratelimit/limiter.go` — per-caller token-bucket rate limiter
+- `config/policy_rules.yaml` — example YAML rules file
+- `config/config.example.yaml` — example full config
+
+**Files Modified:**
+- `go.mod` — added fsnotify, prometheus exporter, otlp trace exporter, x/time, yaml.v3
+- `config/config.go` — added RateLimitConfig, policy.rules_file, telemetry OTLP fields
+- `internal/policy/engine.go` — added sync.RWMutex + UpdateRules() for hot-reload
+- `internal/telemetry/otel.go` — pluggable trace/metrics exporters; Config struct; MetricsHandler field
+- `internal/middleware/inspect.go` — added *ratelimit.Limiter parameter; version bumped to 0.2.0
+- `pkg/errors/errors.go` — added CodeRateLimited
+- `cmd/server/main.go` — wired Prometheus /metrics, YAML policy load, fsnotify watcher, rate limiter
+
+**Key Decisions:**
+- Prometheus is default metrics exporter (pull-based, production-ready)
+- OTLP is opt-in trace exporter (set `telemetry.exporter_type: otlp`)
+- Hot-reload is file-watch only (not full config reload — port/host changes still require restart)
+- Rate limiter map has no TTL eviction (acceptable for bounded caller populations in V2)
+- YAML rules fully replace hardcoded defaults when `policy.rules_file` is set

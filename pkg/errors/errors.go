@@ -10,6 +10,7 @@ const (
 	CodeInternalError  Code = "INTERNAL_ERROR"
 	CodePolicyDeny     Code = "POLICY_DENY"
 	CodeTimeout        Code = "TIMEOUT"
+	CodeRateLimited    Code = "RATE_LIMITED"
 )
 
 type FirewallError struct {

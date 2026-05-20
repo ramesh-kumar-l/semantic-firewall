@@ -1,50 +1,49 @@
 # Current Phase
 
-## Phase: 0 — Foundation & Scaffolding
+## Phase: 2 — Policy Engine & Observability
 
-**Status:** In Progress  
-**Started:** 2026-05-20
+**Status:** Complete  
+**Started:** 2026-05-20  
+**Completed:** 2026-05-20
 
 ---
 
-## Active Milestone
+## Phase 2 Goals
 
-Set up project-memory-bank, establish Go module structure, scaffold core packages for Phase 1 implementation.
+- [x] YAML-driven policy rules (`internal/policy/loader.go`)
+- [x] Policy hot-reload via fsnotify (watches `policy.rules_file` on disk)
+- [x] Prometheus `/metrics` endpoint (OTel Prometheus exporter)
+- [x] OTLP trace exporter support (`telemetry.exporter_type: otlp`)
+- [x] Pluggable telemetry config (`telemetry.Config` struct in telemetry package)
+- [x] Per-caller rate limiting (`internal/ratelimit`, token bucket via `golang.org/x/time/rate`)
+- [x] `CodeRateLimited` error code added to `pkg/errors`
+- [x] `RateLimitConfig` and extended policy/telemetry config fields in `config/config.go`
+- [x] `config/policy_rules.yaml` and `config/config.example.yaml` example files
 
-## Phase Goals
+## Phase 2 Key Decisions
 
-- [x] Create all 12 project-memory-bank files
-- [ ] Initialize Go module (`go mod init`)
-- [ ] Scaffold directory structure
-- [ ] Define core shared types (`pkg/types`)
-- [ ] Define error types (`pkg/errors`)
-- [ ] Create `cmd/server/main.go` stub
-- [ ] Set up `go.sum` with initial dependencies
+- Prometheus is the default metrics exporter (replaces stdout metrics); stdout traces remain default
+- Metrics → Prometheus pull-based; Traces → stdout (default) or OTLP push-based
+- Rate limiting is per caller_id (from request body), falls back to RemoteAddr
+- No in-memory rate limiter cleanup in V2 (unbounded map); acceptable for bounded caller populations
+- Hot-reload is file-based (fsnotify Write/Create events), atomic rule swap under sync.RWMutex
+- YAML policy rules fully replace hardcoded defaults when `policy.rules_file` is set
 
-## In-Progress Tasks
+## Next Phase: Phase 3 — Transform & Alert Actions
 
-- Scaffolding memory bank (in progress)
-
-## Next Phase: Phase 1 — Prompt Inspection Core
-
-### Phase 1 Goals
-1. HTTP server with health endpoint
-2. Prompt inspection middleware (inline intercept)
-3. Semantic risk scorer (deterministic, rule-based v1)
-4. Prompt injection detector (pattern + heuristic)
-5. Basic policy engine (allow / deny / transform / alert actions)
-6. Structured audit logger (append-only, JSON-L)
-7. OpenTelemetry setup (traces + metrics)
-
-### Phase 1 Entry Criteria
-- Phase 0 scaffold complete and committed
-- Go module initialized
-- Core types defined
+### Phase 3 Goals
+1. `transform` action: prompt sanitization / redaction
+2. `alert` action: webhook or structured alert emission  
+3. Configurable response templates for denied requests
+4. API key authentication middleware
+5. Rate limiting cleanup (TTL-based limiter map eviction)
 
 ## Blockers
 
-None.
+- Go 1.22+ must be installed before building (`go mod tidy && go build ./...`)
+- `go.sum` not yet generated (requires `go mod tidy` with network access)
 
 ## Notes
 
-Language decision: **Go** (chosen for runtime guarantees, performance, security middleware fit).
+- `telemetry.New()` signature changed: now takes `telemetry.Config` struct instead of `(serviceName, serviceVersion string)`
+- `inspectmw.Handler()` signature extended: last parameter is `*ratelimit.Limiter` (nil = disabled)

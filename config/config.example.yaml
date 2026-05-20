@@ -1,0 +1,27 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout_ms: 5000
+  write_timeout_ms: 5000
+  inspect_timeout_ms: 500
+  max_prompt_bytes: 65536
+
+audit:
+  path: "audit.jsonl"
+
+policy:
+  default_action: "allow"
+  deny_threshold: 0.8
+  rules_file: "config/policy_rules.yaml"
+
+telemetry:
+  service_name: "semantic-firewall"
+  service_version: "0.2.0"
+  exporter_type: "stdout"        # "stdout" or "otlp"
+  metrics_exporter: "prometheus" # "prometheus" or "stdout"
+  otlp_endpoint: "http://localhost:4318"
+
+rate_limit:
+  enabled: true
+  rps: 10.0
+  burst: 20

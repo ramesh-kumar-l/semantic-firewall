@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 
@@ -19,13 +20,14 @@ import (
 	"github.com/ramesh152/semantic-firewall/internal/detection"
 	inspectmw "github.com/ramesh152/semantic-firewall/internal/middleware"
 	"github.com/ramesh152/semantic-firewall/internal/policy"
+	"github.com/ramesh152/semantic-firewall/internal/ratelimit"
 	"github.com/ramesh152/semantic-firewall/internal/scoring"
 	"github.com/ramesh152/semantic-firewall/internal/telemetry"
 	"github.com/ramesh152/semantic-firewall/pkg/types"
 )
 
 const (
-	version      = "0.1.0"
+	version      = "0.2.0"
 	drainTimeout = 10 * time.Second
 )
 
@@ -43,7 +45,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	tel, err := telemetry.New(cfg.Telemetry.ServiceName, cfg.Telemetry.ServiceVersion)
+	tel, err := telemetry.New(telemetry.Config{
+		ServiceName:     cfg.Telemetry.ServiceName,
+		ServiceVersion:  cfg.Telemetry.ServiceVersion,
+		TraceExporter:   cfg.Telemetry.ExporterType,
+		MetricsExporter: cfg.Telemetry.MetricsExporter,
+		OTLPEndpoint:    cfg.Telemetry.OTLPEndpoint,
+	})
 	if err != nil {
 		slog.Error("telemetry.init.error", "error", err.Error())
 		os.Exit(1)
@@ -76,6 +84,39 @@ func main() {
 		types.Decision(cfg.Policy.DefaultAction),
 	)
 
+	// Load YAML policy rules if configured, replacing hardcoded defaults.
+	if cfg.Policy.RulesFile != "" {
+		rules, err := policy.LoadRulesFromFile(cfg.Policy.RulesFile)
+		if err != nil {
+			slog.Error("policy.rules.load.error", "error", err.Error(), "file", cfg.Policy.RulesFile)
+			os.Exit(1)
+		}
+		policyEngine.UpdateRules(rules)
+		slog.Info("policy.rules.loaded", "file", cfg.Policy.RulesFile, "count", len(rules))
+	}
+
+	// Hot-reload: watch policy rules file for changes.
+	if cfg.Policy.RulesFile != "" {
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			slog.Warn("policy.hotreload.init.failed", "error", err.Error())
+		} else {
+			if err := watcher.Add(cfg.Policy.RulesFile); err != nil {
+				slog.Warn("policy.hotreload.watch.failed", "error", err.Error(), "file", cfg.Policy.RulesFile)
+				watcher.Close()
+			} else {
+				go watchPolicyFile(watcher, cfg.Policy.RulesFile, policyEngine)
+				defer watcher.Close()
+			}
+		}
+	}
+
+	var rateLimiter *ratelimit.Limiter
+	if cfg.RateLimit.Enabled {
+		rateLimiter = ratelimit.New(cfg.RateLimit.RPS, cfg.RateLimit.Burst)
+		slog.Info("rate_limit.enabled", "rps", cfg.RateLimit.RPS, "burst", cfg.RateLimit.Burst)
+	}
+
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RequestID)
@@ -90,7 +131,13 @@ func main() {
 		instruments,
 		time.Duration(cfg.Server.InspectTimeoutMs)*time.Millisecond,
 		cfg.Server.MaxPromptBytes,
+		rateLimiter,
 	))
+
+	if tel.MetricsHandler != nil {
+		r.Handle("/metrics", tel.MetricsHandler)
+		slog.Info("metrics.prometheus.enabled", "path", "/metrics")
+	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	srv := &http.Server{
@@ -129,6 +176,31 @@ func main() {
 	}
 
 	slog.Info("server.stopped")
+}
+
+func watchPolicyFile(watcher *fsnotify.Watcher, path string, engine *policy.RuleEngine) {
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+				rules, err := policy.LoadRulesFromFile(path)
+				if err != nil {
+					slog.Error("policy.hotreload.parse.failed", "error", err.Error(), "file", path)
+					continue
+				}
+				engine.UpdateRules(rules)
+				slog.Info("policy.hotreload.success", "file", path, "rules", len(rules))
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			slog.Error("policy.hotreload.watch.error", "error", err.Error())
+		}
+	}
 }
 
 func healthHandler(ver string) http.HandlerFunc {

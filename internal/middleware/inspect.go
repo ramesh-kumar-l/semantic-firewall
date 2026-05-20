@@ -17,16 +17,15 @@ import (
 	"github.com/ramesh152/semantic-firewall/internal/audit"
 	"github.com/ramesh152/semantic-firewall/internal/detection"
 	"github.com/ramesh152/semantic-firewall/internal/policy"
+	"github.com/ramesh152/semantic-firewall/internal/ratelimit"
 	"github.com/ramesh152/semantic-firewall/internal/scoring"
 	"github.com/ramesh152/semantic-firewall/internal/telemetry"
 )
 
-const (
-	firewallVersion = "0.1.0"
-	maxPromptBytes  = 65536
-)
+const firewallVersion = "0.2.0"
 
 // Handler returns an http.HandlerFunc that inspects prompts.
+// rateLimiter may be nil if rate limiting is disabled.
 func Handler(
 	scorer scoring.Scorer,
 	detector detection.Detector,
@@ -36,6 +35,7 @@ func Handler(
 	instruments *telemetry.Instruments,
 	inspectTimeout time.Duration,
 	maxBytes int,
+	rateLimiter *ratelimit.Limiter,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -61,17 +61,27 @@ func Handler(
 			telemetry.AttrTraceID(traceID),
 		)
 
+		// Rate limiting: prefer caller_id, fall back to remote address.
+		if rateLimiter != nil {
+			key := r.RemoteAddr
+			if req.Context != nil && req.Context.CallerID != "" {
+				key = req.Context.CallerID
+			}
+			if !rateLimiter.Allow(key) {
+				writeError(w, http.StatusTooManyRequests,
+					fwerrors.New(fwerrors.CodeRateLimited, "rate limit exceeded"))
+				return
+			}
+		}
+
 		slog.InfoContext(ctx, "request.received",
 			"trace_id", traceID,
 			"request_id", req.RequestID,
 			"prompt_length", len(req.Prompt),
 		)
 
-		// Normalize: trim excess whitespace; no encoding changes in V1.
 		normalized := normalize(req.Prompt)
 
-		// Score (findings-driven in V1; pass nil findings initially, then refine)
-		// Detection must run before scoring so scorer can use findings.
 		_, detectSpan := tel.StartSpan(ctx, telemetry.SpanDetect)
 		findings, err := detector.Detect(ctx, normalized)
 		detectSpan.End()
@@ -106,13 +116,11 @@ func Handler(
 			telemetry.AttrLatencyMs(latencyMs),
 		)
 
-		// Emit metrics.
 		instruments.RecordRequest(ctx, string(decision), float64(riskScore), latencyMs)
 		for _, f := range findings {
 			instruments.RecordFinding(ctx, string(f.Type), string(f.Severity))
 		}
 
-		// Audit — written regardless of decision; fail closed if write fails.
 		auditRec := types.AuditRecord{
 			TraceID:           traceID,
 			RequestID:         req.RequestID,
@@ -228,8 +236,6 @@ func writeError(w http.ResponseWriter, code int, err *fwerrors.FirewallError) {
 }
 
 func normalize(s string) string {
-	// V1: return as-is; normalization (unicode NFC, whitespace collapsing)
-	// added in Phase 2 when encoding-trick detection is implemented.
 	return s
 }
 

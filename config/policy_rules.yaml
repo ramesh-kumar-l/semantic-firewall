@@ -1,0 +1,19 @@
+rules:
+  - name: deny_on_critical_finding
+    condition: has_finding
+    severity: critical
+    action: deny
+
+  - name: deny_on_high_finding
+    condition: has_finding
+    severity: high
+    action: deny
+
+  - name: deny_on_score_threshold
+    condition: score_above
+    threshold: 0.8
+    action: deny
+
+  - name: default
+    condition: always
+    action: allow
