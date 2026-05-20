@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Decision string
 
@@ -24,10 +27,12 @@ const (
 type FindingType string
 
 const (
-	FindingPromptInjection FindingType = "prompt_injection"
-	FindingRoleOverride    FindingType = "role_override"
-	FindingJailbreak       FindingType = "jailbreak"
-	FindingEncodingTrick   FindingType = "encoding_trick"
+	FindingPromptInjection  FindingType = "prompt_injection"
+	FindingRoleOverride     FindingType = "role_override"
+	FindingJailbreak        FindingType = "jailbreak"
+	FindingEncodingTrick    FindingType = "encoding_trick"
+	FindingMemoryPoisoning  FindingType = "memory_poisoning"
+	FindingToolCallInjection FindingType = "tool_call_injection"
 )
 
 // RiskScore is a normalized risk value in [0.0, 1.0].
@@ -52,10 +57,11 @@ type PromptContext struct {
 }
 
 type InspectRequest struct {
-	RequestID string         `json:"request_id,omitempty"`
-	Model     string         `json:"model,omitempty"`
-	Prompt    string         `json:"prompt"`
-	Context   *PromptContext `json:"context,omitempty"`
+	RequestID string             `json:"request_id,omitempty"`
+	Model     string             `json:"model,omitempty"`
+	Prompt    string             `json:"prompt"`
+	Context   *PromptContext     `json:"context,omitempty"`
+	ToolCalls []json.RawMessage  `json:"tool_calls,omitempty"` // optional: structured tool call objects to inspect
 }
 
 type InspectResponse struct {

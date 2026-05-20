@@ -38,3 +38,6 @@ auth:
 alert:
   webhook_url: ""    # POST target for alert-action rules; empty = disabled
   timeout_ms: 5000
+
+session:
+  ttl_seconds: 3600  # evict idle session records after 1 hour; 0 = disabled

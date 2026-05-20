@@ -23,12 +23,13 @@ import (
 	"github.com/ramesh152/semantic-firewall/internal/policy"
 	"github.com/ramesh152/semantic-firewall/internal/ratelimit"
 	"github.com/ramesh152/semantic-firewall/internal/scoring"
+	"github.com/ramesh152/semantic-firewall/internal/session"
 	"github.com/ramesh152/semantic-firewall/internal/telemetry"
 	"github.com/ramesh152/semantic-firewall/pkg/types"
 )
 
 const (
-	version      = "0.3.0"
+	version      = "0.4.0"
 	drainTimeout = 10 * time.Second
 )
 
@@ -130,6 +131,13 @@ func main() {
 		slog.Info("alert.webhook.enabled", "url", cfg.Alert.WebhookURL)
 	}
 
+	var sessionStore *session.Store
+	if cfg.Session.TTLSeconds > 0 {
+		sessionStore = session.New(time.Duration(cfg.Session.TTLSeconds) * time.Second)
+		defer sessionStore.Stop()
+		slog.Info("session.store.enabled", "ttl_seconds", cfg.Session.TTLSeconds)
+	}
+
 	r := chi.NewRouter()
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RequestID)
@@ -154,6 +162,7 @@ func main() {
 			RateLimiter:    rateLimiter,
 			Alerter:        webhooker,
 			DenyMessage:    cfg.Policy.DenyMessage,
+			SessionStore:   sessionStore,
 		},
 	)
 

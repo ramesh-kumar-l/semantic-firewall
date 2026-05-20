@@ -139,3 +139,37 @@ Implemented `transform` prompt redaction, async webhook alerting, API key authen
 - API key auth applied per-route only to `/v1/inspect`; `/health` + `/metrics` unauthenticated
 - Rate limiter simplified to single write-lock (safe `lastSeen` update); TTL sweep every ttl/2
 - `inspectmw.Handler()` now takes `Options` struct (breaking change from Phase 2)
+
+---
+
+## Phase 4 — Advanced Detection
+
+### TASK-005: Phase 4 Implementation
+
+**Date:** 2026-05-20  
+**Status:** Complete  
+**Phase:** 4
+
+**Summary:**  
+Implemented encoding-aware normalization (base64/ROT13/unicode/URL), memory poisoning detection patterns, tool call inspection, and multi-turn session context awareness.
+
+**Files Created:**
+- `internal/normalize/normalizer.go` — encoding detection + prompt normalization
+- `internal/detection/toolcall.go` — `ExtractToolCallText()` for tool call inspection
+- `internal/session/store.go` — in-memory session state store with TTL eviction
+
+**Files Modified:**
+- `pkg/types/types.go` — added `FindingMemoryPoisoning`, `FindingToolCallInjection`; `ToolCalls []json.RawMessage` to `InspectRequest`
+- `internal/detection/patterns.go` — 6 new memory poisoning patterns
+- `internal/middleware/inspect.go` — wired normalizer, tool call detection, session escalation; `SessionStore` in `Options`; version 0.4.0
+- `cmd/server/main.go` — wired session store, version 0.4.0
+- `config/config.go` — added `SessionConfig` with `TTLSeconds`
+- `config/config.example.yaml` — added `session` section
+- `go.mod` — added `golang.org/x/text v0.16.0`
+
+**Key Decisions:**
+- Normalizer runs before all detection; encoding findings prepended to findings list
+- Tool call inspection reuses `InjectionDetector` — no new interface; extracted text passed as plain string
+- Session escalation: ×1.2 multiplier on risk when prior `MaxRisk > 0.5` (capped at 1.0)
+- Session store disabled when `ttl_seconds = 0` (no goroutine, nil pointer)
+- `normalize()` stub in `inspect.go` replaced with real `normalize.Normalize()` call

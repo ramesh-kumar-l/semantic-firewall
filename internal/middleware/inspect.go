@@ -14,16 +14,18 @@ import (
 	"github.com/ramesh152/semantic-firewall/internal/alert"
 	"github.com/ramesh152/semantic-firewall/internal/audit"
 	"github.com/ramesh152/semantic-firewall/internal/detection"
+	"github.com/ramesh152/semantic-firewall/internal/normalize"
 	"github.com/ramesh152/semantic-firewall/internal/policy"
 	"github.com/ramesh152/semantic-firewall/internal/ratelimit"
 	"github.com/ramesh152/semantic-firewall/internal/scoring"
+	"github.com/ramesh152/semantic-firewall/internal/session"
 	"github.com/ramesh152/semantic-firewall/internal/telemetry"
 	"github.com/ramesh152/semantic-firewall/internal/transform"
 	fwerrors "github.com/ramesh152/semantic-firewall/pkg/errors"
 	"github.com/ramesh152/semantic-firewall/pkg/types"
 )
 
-const firewallVersion = "0.3.0"
+const firewallVersion = "0.4.0"
 
 // Options configures the inspect handler.
 type Options struct {
@@ -32,6 +34,7 @@ type Options struct {
 	RateLimiter    *ratelimit.Limiter // nil = disabled
 	Alerter        *alert.Webhooker   // nil = disabled
 	DenyMessage    string             // "" = default message
+	SessionStore   *session.Store     // nil = disabled
 }
 
 // Handler returns an http.HandlerFunc that inspects prompts.
@@ -87,14 +90,31 @@ func Handler(
 			"prompt_length", len(req.Prompt),
 		)
 
-		normalized := normalize(req.Prompt)
+		// Normalize: strip encoding tricks before detection.
+		normResult := normalize.Normalize(req.Prompt)
+		normalized := normResult.Normalized
+		findings := normResult.Findings
 
 		_, detectSpan := tel.StartSpan(ctx, telemetry.SpanDetect)
-		findings, err := detector.Detect(ctx, normalized)
+		promptFindings, err := detector.Detect(ctx, normalized)
 		detectSpan.End()
 		if err != nil {
 			handleInternalError(ctx, w, traceID, err, logger, instruments, start)
 			return
+		}
+		findings = append(findings, promptFindings...)
+
+		// Tool call inspection: extract strings from structured tool call objects and detect.
+		if len(req.ToolCalls) > 0 {
+			toolText := detection.ExtractToolCallText(req.ToolCalls)
+			if toolText != "" {
+				toolFindings, err := detector.Detect(ctx, toolText)
+				if err != nil {
+					handleInternalError(ctx, w, traceID, err, logger, instruments, start)
+					return
+				}
+				findings = append(findings, toolFindings...)
+			}
 		}
 
 		_, scoreSpan := tel.StartSpan(ctx, telemetry.SpanScore)
@@ -103,6 +123,17 @@ func Handler(
 		if err != nil {
 			handleInternalError(ctx, w, traceID, err, logger, instruments, start)
 			return
+		}
+
+		// Session context: escalate risk if this session had prior high-risk turns.
+		sessionID := ""
+		if req.Context != nil {
+			sessionID = req.Context.SessionID
+		}
+		if opts.SessionStore != nil && sessionID != "" {
+			if rec := opts.SessionStore.Get(sessionID); rec != nil && rec.MaxRisk > 0.5 {
+				riskScore = escalateRisk(riskScore)
+			}
 		}
 
 		_, policySpan := tel.StartSpan(ctx, telemetry.SpanPolicyEvaluate)
@@ -158,6 +189,11 @@ func Handler(
 			writeError(w, http.StatusInternalServerError,
 				fwerrors.Wrap(fwerrors.CodeInternalError, "audit write failed", writeErr))
 			return
+		}
+
+		// Update session store after successful audit write.
+		if opts.SessionStore != nil && sessionID != "" {
+			opts.SessionStore.Update(sessionID, riskScore, findings)
 		}
 
 		resp := types.InspectResponse{
@@ -269,8 +305,12 @@ func writeError(w http.ResponseWriter, code int, err *fwerrors.FirewallError) {
 	writeJSON(w, code, err)
 }
 
-func normalize(s string) string {
-	return s
+func escalateRisk(r types.RiskScore) types.RiskScore {
+	escalated := types.RiskScore(float64(r) * 1.2)
+	if escalated > types.RiskScoreMax {
+		return types.RiskScoreMax
+	}
+	return escalated
 }
 
 func promptHash(s string) string {

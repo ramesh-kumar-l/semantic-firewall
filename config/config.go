@@ -14,6 +14,7 @@ type Config struct {
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 	Auth      AuthConfig      `mapstructure:"auth"`
 	Alert     AlertConfig     `mapstructure:"alert"`
+	Session   SessionConfig   `mapstructure:"session"`
 }
 
 type ServerConfig struct {
@@ -61,6 +62,10 @@ type AlertConfig struct {
 	TimeoutMs  int    `mapstructure:"timeout_ms"`
 }
 
+type SessionConfig struct {
+	TTLSeconds int `mapstructure:"ttl_seconds"` // evict idle sessions after N seconds; 0 = disabled
+}
+
 func Load(path string) (*Config, error) {
 	v := viper.New()
 
@@ -88,6 +93,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("alert.webhook_url", "")
 	v.SetDefault("alert.timeout_ms", 5000)
 	v.SetDefault("policy.deny_message", "")
+	v.SetDefault("session.ttl_seconds", 3600)
 
 	v.AutomaticEnv()
 

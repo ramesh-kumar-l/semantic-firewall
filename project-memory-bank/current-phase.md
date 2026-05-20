@@ -1,6 +1,6 @@
 # Current Phase
 
-## Phase: 3 — Transform & Alert Actions
+## Phase: 4 — Advanced Detection
 
 **Status:** Complete  
 **Started:** 2026-05-20  
@@ -8,54 +8,61 @@
 
 ---
 
-## Phase 3 Goals
+## Phase 4 Goals
 
-- [x] `transform` action: prompt sanitization / redaction (`internal/transform/redactor.go`)
-- [x] `alert` action: async webhook POST (`internal/alert/webhook.go`)
-- [x] Configurable deny message: `policy.deny_message` in config → `message` field in response
-- [x] API key authentication middleware (`internal/middleware/apikey.go`)
-  - Accepts `Authorization: Bearer <key>` or `X-API-Key: <key>`
-  - Constant-time comparison (`crypto/subtle`)
-  - Applied per-route (protects `/v1/inspect` only)
-- [x] Rate limiter TTL eviction: background cleanup goroutine, `Stop()` method
-- [x] `Options` struct in `internal/middleware` (replaces long param list)
-- [x] `CodeUnauthorized` error code added to `pkg/errors`
-- [x] `SanitizedPrompt` and `Message` fields added to `types.InspectResponse`
-- [x] `AuthConfig`, `AlertConfig`, `DenyMessage`, `TTLSeconds` added to `config/config.go`
-- [x] `config/config.example.yaml` updated with new sections
+- [x] Encoding-aware normalization (`internal/normalize/normalizer.go`)
+  - Zero-width / invisible Unicode character stripping
+  - NFKC Unicode normalization (collapses homoglyphs via `golang.org/x/text`)
+  - URL percent-encoding detection and decode
+  - Base64 segment detection and decode (printable ASCII check)
+  - ROT13 canary detection and full-string decode
+- [x] Memory poisoning detection patterns (added to `internal/detection/patterns.go`)
+  - `from_now_on`, `remember_you_must`, `new_default_behavior`, `store_in_memory`, `always_respond_with`, `whenever_user_asks`
+  - New `FindingMemoryPoisoning` finding type
+- [x] Tool call inspection (`internal/detection/toolcall.go`)
+  - `ExtractToolCallText()` recursively extracts string values from `[]json.RawMessage`
+  - Result passed to existing `InjectionDetector.Detect()` — no new interface needed
+  - `ToolCalls []json.RawMessage` added to `types.InspectRequest`
+- [x] Multi-turn context awareness (`internal/session/store.go`)
+  - In-memory session registry with TTL eviction (same pattern as rate limiter)
+  - `Get()` / `Update()` per session_id in request context
+  - If `MaxRisk > 0.5` in prior turns: current risk escalated ×1.2 (capped at 1.0)
+  - `SessionStore *session.Store` added to `Options` struct
+  - `session.ttl_seconds` config key (default 3600, 0 = disabled)
+- [x] New finding types: `FindingMemoryPoisoning`, `FindingToolCallInjection`
+- [x] `golang.org/x/text v0.16.0` added to `go.mod`
+- [x] Version bumped to `0.4.0`
 
-## Phase 3 Key Decisions
+## Phase 4 Key Decisions
 
-- `transform` decision: redacts finding evidence strings with `[REDACTED]`; returns `sanitized_prompt` in response
-- `alert` decision: fires async webhook POST (goroutine) with `AuditRecord` as payload; caller receives `decision: alert`
-- All decisions return HTTP 200 — this is an inspection API, not a proxy; caller checks `decision` field
-- API key auth is a chi middleware applied per-route (not global); `/health` and `/metrics` remain unauthenticated
-- Rate limiter uses single write-lock (simplified from Phase 2 double-checked locking) to safely track `lastSeen`
-- TTL eviction sweeps every `ttl/2` interval; 0 TTL = no eviction, no goroutine started
-- `inspectmw.Handler()` now takes `Options` struct instead of individual params (breaking change from Phase 2)
-- Version bumped to `0.3.0`
+- Normalizer runs before all detection; encoding findings prepended to findings list
+- Tool call injection findings reuse `InjectionDetector` — no separate interface; any matched finding is labelled with detector name `injection_detector_v1`
+- Session escalation: simple ×1.2 multiplier when prior MaxRisk > 0.5 (conservative; callers can tune via YAML rules threshold)
+- Session store disabled when `ttl_seconds = 0` (no goroutine started, nil pointer passed)
+- `normalize.Normalize()` replaces the stub `normalize()` function in `inspect.go`
 
-## Breaking Changes from Phase 2
+## Breaking Changes from Phase 3
 
-- `inspectmw.Handler()` signature: now takes `Options` struct as last param (was: 3 individual params)
-- `ratelimit.New()` signature: now takes `ttl time.Duration` as third param
-- `firewallVersion` constant in middleware: `"0.3.0"`
+- `golang.org/x/text` added to `go.mod` — `go mod tidy` required before build
+- `firewallVersion` constant in middleware: `"0.4.0"`
+- `Options.SessionStore *session.Store` added (nil-safe; no callers break)
+- `types.InspectRequest.ToolCalls []json.RawMessage` added (nil-safe; no callers break)
 
-## Next Phase: Phase 4 — Advanced Detection
+## Next Phase: Phase 5 — Testing & Hardening (proposed)
 
-### Phase 4 Goals
-1. Encoding-aware normalization (base64, rot13, unicode tricks)
-2. Semantic similarity detection (embedding-based, optional)
-3. Memory poisoning detection patterns
-4. Tool call inspection (structured JSON tool calls)
-5. Multi-turn context awareness
+### Phase 5 Goals
+1. Unit tests for all packages (normalize, detection, session, scoring, policy, transform, alert)
+2. Integration test for the full `/v1/inspect` pipeline
+3. Fuzz target for normalize.Normalize()
+4. Benchmark for hot path (detection + scoring)
 
 ## Blockers
 
-- Go 1.22+ must be installed before building (`go mod tidy && go build ./...`)
-- `go.sum` not yet generated (requires `go mod tidy` with network access)
+- Go 1.22+ must be installed before building
+- `go mod tidy` required after Phase 4 (new `golang.org/x/text` dependency)
+- `go.sum` not yet generated
 
 ## Notes
 
-- `telemetry.New()` still takes `telemetry.Config` struct (unchanged from Phase 2)
-- `inspectmw.APIKeyAuth()` is in the `middleware` package alongside `Handler()`
+- `golang.org/x/text v0.16.0` needed for `golang.org/x/text/unicode/norm` NFKC normalization
+- Session store pattern mirrors `ratelimit.Limiter` (same TTL eviction logic)

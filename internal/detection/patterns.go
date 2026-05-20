@@ -129,4 +129,42 @@ var injectionPatterns = []pattern{
 		severity: types.SeverityHigh,
 		label:    "fake_system_xml_tag",
 	},
+
+	// Memory poisoning — attempts to persist behavior across turns
+	{
+		re:       regexp.MustCompile(`(?i)from\s+now\s+on\s+(always|never|you\s+should|you\s+must)`),
+		findType: types.FindingMemoryPoisoning,
+		severity: types.SeverityHigh,
+		label:    "from_now_on",
+	},
+	{
+		re:       regexp.MustCompile(`(?i)remember\s+(that\s+)?you\s+(must|should|always|never|will)`),
+		findType: types.FindingMemoryPoisoning,
+		severity: types.SeverityHigh,
+		label:    "remember_you_must",
+	},
+	{
+		re:       regexp.MustCompile(`(?i)your\s+(new\s+)?(default|permanent)\s+(behavior|response|instruction|mode)`),
+		findType: types.FindingMemoryPoisoning,
+		severity: types.SeverityHigh,
+		label:    "new_default_behavior",
+	},
+	{
+		re:       regexp.MustCompile(`(?i)store\s+(this|the\s+following)\s+(in\s+your\s+memory|for\s+future\s+reference)`),
+		findType: types.FindingMemoryPoisoning,
+		severity: types.SeverityMedium,
+		label:    "store_in_memory",
+	},
+	{
+		re:       regexp.MustCompile(`(?i)always\s+respond\s+(with|as\s+if)`),
+		findType: types.FindingMemoryPoisoning,
+		severity: types.SeverityHigh,
+		label:    "always_respond_with",
+	},
+	{
+		re:       regexp.MustCompile(`(?i)whenever\s+(a\s+user|someone|anyone)\s+asks?`),
+		findType: types.FindingMemoryPoisoning,
+		severity: types.SeverityMedium,
+		label:    "whenever_user_asks",
+	},
 }
